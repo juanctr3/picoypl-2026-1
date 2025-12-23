@@ -11,29 +11,58 @@ class PicoYPlaca {
     private $festivos;
     private $tipo;
     private $restricciones;
+    private $configCiudad;
     
     public function __construct($ciudad, DateTime $fecha, $ciudades, $festivos) {
         $this->ciudad = $ciudad;
         $this->fecha = $fecha;
         $this->ciudades = $ciudades;
         $this->festivos = $festivos;
-        $this->tipo = $ciudades[$ciudad]['tipo'] ?? 'dia-semana';
-        $this->restricciones = $ciudades[$ciudad]['restricciones'] ?? [];
+        
+        $this->configCiudad = $ciudades[$ciudad] ?? null;
+        $this->tipo = $this->configCiudad['tipo'] ?? 'dia-semana';
+        $this->restricciones = $this->configCiudad['restricciones'] ?? [];
     }
     
     /**
      * Obtiene las placas con restricción para la fecha
      */
     public function getRestricciones() {
+        // Regla general: No hay pico y placa sábados, domingos o festivos
+        // (A menos que la ciudad tenga lógica específica para sábados como Bucaramanga en el futuro)
         if ($this->esFinDeSemana() || $this->esFestivo()) {
             return [];
         }
         
-        if ($this->tipo === 'dia-impar-par') {
-            return $this->getRestriccionesPorImparPar();
-        } else {
-            return $this->getRestriccionesPorDiaSemana();
+        switch ($this->tipo) {
+            case 'dia-impar-par':
+                return $this->getRestriccionesPorImparPar();
+            
+            case 'ibague-rotativo':
+                return $this->getRestriccionesIbague();
+                
+            case 'dia-semana':
+            default:
+                return $this->getRestriccionesPorDiaSemana();
         }
+    }
+
+    /**
+     * Lógica Especial para Ibagué (Rotación por periodos)
+     */
+    private function getRestriccionesIbague() {
+        $fechaActualStr = $this->fecha->format('Y-m-d');
+        $periodos = $this->configCiudad['periodos'] ?? [];
+        $diaSemana = $this->fecha->format('l');
+        
+        foreach ($periodos as $p) {
+            if ($fechaActualStr >= $p['inicio'] && $fechaActualStr <= $p['fin']) {
+                return $p['reglas'][$diaSemana] ?? [];
+            }
+        }
+        
+        // Fallback si la fecha no está en los rangos definidos
+        return $this->configCiudad['restricciones_default'][$diaSemana] ?? [];
     }
     
     /**
@@ -42,7 +71,7 @@ class PicoYPlaca {
     public function getPermitidas() {
         $restricciones = $this->getRestricciones();
         $todas = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
-        return array_diff($todas, $restricciones);
+        return array_values(array_diff($todas, $restricciones));
     }
     
     /**
@@ -104,14 +133,14 @@ class PicoYPlaca {
      * Obtiene el nombre de la ciudad
      */
     public function getNombreCiudad() {
-        return $this->ciudades[$this->ciudad]['nombre'] ?? 'Desconocida';
+        return $this->configCiudad['nombre'] ?? 'Desconocida';
     }
     
     /**
      * Obtiene el horario de pico y placa
      */
     public function getHorario() {
-        return $this->ciudades[$this->ciudad]['horario'] ?? '6:00 a.m. - 9:00 p.m.';
+        return $this->configCiudad['horario'] ?? '6:00 a.m. - 9:00 p.m.';
     }
     
     /**
@@ -131,28 +160,6 @@ class PicoYPlaca {
     }
     
     /**
-     * Calcula cuánto tiempo falta para activar/desactivar pico y placa
-     */
-    public function getTiempoHastaCambio() {
-        $ahora = new DateTime();
-        $horarioInicio = $this->ciudades[$this->ciudad]['horarioInicio'] ?? 6;
-        $horarioFin = $this->ciudades[$this->ciudad]['horarioFin'] ?? 21;
-        
-        $horaActual = (int)$ahora->format('H');
-        
-        if ($horaActual >= $horarioInicio && $horaActual < $horarioFin) {
-            $proximoTiempo = new DateTime();
-            $proximoTiempo->setTime($horarioFin, 0, 0);
-            return $proximoTiempo->diff($ahora);
-        } else {
-            $proximoTiempo = new DateTime();
-            $proximoTiempo->modify('+1 day');
-            $proximoTiempo->setTime($horarioInicio, 0, 0);
-            return $proximoTiempo->diff($ahora);
-        }
-    }
-    
-    /**
      * Verifica si pico y placa está activo ahora
      */
     public function estaActivo() {
@@ -162,57 +169,10 @@ class PicoYPlaca {
         
         $ahora = new DateTime();
         $horaActual = (int)$ahora->format('H');
-        $horarioInicio = $this->ciudades[$this->ciudad]['horarioInicio'] ?? 6;
-        $horarioFin = $this->ciudades[$this->ciudad]['horarioFin'] ?? 21;
+        $horarioInicio = $this->configCiudad['horarioInicio'] ?? 6;
+        $horarioFin = $this->configCiudad['horarioFin'] ?? 21;
         
         return $horaActual >= $horarioInicio && $horaActual < $horarioFin;
-    }
-    
-    /**
-     * Obtiene tiempo hasta próximo cambio (activación/desactivación)
-     */
-    public function getTiempoHastaPicoYPlaca() {
-        $ahora = new DateTime();
-        $horarioInicio = $this->ciudades[$this->ciudad]['horarioInicio'] ?? 6;
-        $horarioFin = $this->ciudades[$this->ciudad]['horarioFin'] ?? 21;
-        $horaActual = (int)$ahora->format('H');
-        
-        if ($horaActual >= $horarioInicio && $horaActual < $horarioFin) {
-            $proximoTiempo = new DateTime();
-            $proximoTiempo->setTime($horarioFin, 0, 0);
-        } else {
-            $proximoTiempo = new DateTime();
-            $proximoTiempo->modify('+1 day');
-            $proximoTiempo->setTime($horarioInicio, 0, 0);
-        }
-        
-        $diff = $proximoTiempo->diff($ahora);
-        $totalSegundos = ($diff->days * 86400) + ($diff->h * 3600) + ($diff->i * 60) + $diff->s;
-        
-        return [
-            'horas' => $diff->h + ($diff->days * 24),
-            'minutos' => $diff->i,
-            'segundos' => $diff->s,
-            'timestamp' => $totalSegundos
-        ];
-    }
-    
-    /**
-     * Obtiene información general
-     */
-    public function getInfo() {
-        return [
-            'ciudad' => $this->getNombreCiudad(),
-            'fecha' => $this->fecha->format('Y-m-d'),
-            'dia' => $this->getDiaEnEspanol(),
-            'restricciones' => $this->getRestricciones(),
-            'permitidas' => $this->getPermitidas(),
-            'horario' => $this->getHorario(),
-            'es_fin_semana' => $this->esFinDeSemana(),
-            'es_festivo' => $this->esFestivo(),
-            'estado' => $this->getEstado(),
-            'esta_activo' => $this->estaActivo()
-        ];
     }
 }
 ?>
